@@ -212,11 +212,30 @@ function buildVolumeMounts(
   return mounts;
 }
 
+/**
+ * Read allowed secrets from .env for passing to the container via stdin.
+ * Secrets are never written to disk or mounted as files.
+ */
+function readSecrets(): Record<string, string> {
+  return readEnvFile([
+    'CLAUDE_CODE_OAUTH_TOKEN',
+    'ANTHROPIC_API_KEY',
+    'ANTHROPIC_BASE_URL',
+    'ANTHROPIC_AUTH_TOKEN',
+    'FMP_API_KEY',
+    'PERPLEXITY_API_KEY',
+  ]);
+}
+
 function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
+
+  // Apple Container's vmnet gateway doesn't run a DNS forwarder,
+  // so we pass an explicit public DNS server.
+  args.push('--dns', '8.8.8.8');
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);

@@ -52,6 +52,7 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
+import { startDashboard } from './dashboard.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -540,6 +541,11 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Start dashboard
+  startDashboard({
+    getActiveContainers: () => queue.getActiveContainers(),
+  });
+
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({
     registeredGroups: () => registeredGroups,
@@ -562,6 +568,22 @@ async function main(): Promise<void> {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
       return channel.sendMessage(jid, text);
+    },
+    sendPhoto: async (jid, photo) => {
+      const channel = findChannel(channels, jid);
+      if (!channel) throw new Error(`No channel for JID: ${jid}`);
+      if (!channel.sendPhoto) {
+        logger.warn(
+          { jid },
+          'Channel does not support photos, sending caption as text',
+        );
+        await channel.sendMessage(
+          jid,
+          photo.caption || '[Chart image — channel does not support photos]',
+        );
+        return;
+      }
+      await channel.sendPhoto(jid, photo);
     },
     registeredGroups: () => registeredGroups,
     registerGroup,
