@@ -258,7 +258,9 @@ function handleTrades(
 
   try {
     const tables = db
-      .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='trades'`)
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='trades'`,
+      )
       .all() as Array<{ name: string }>;
 
     if (tables.length === 0) {
