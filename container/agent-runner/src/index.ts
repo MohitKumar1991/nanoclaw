@@ -409,6 +409,7 @@ async function runQuery(
         'NotebookEdit',
         'mcp__nanoclaw__*',
         'mcp__fmp__*',
+        'mcp__ibkr__*',
         'mcp__perplexity__*'
       ],
       env: sdkEnv,
@@ -431,6 +432,18 @@ async function runQuery(
             args: [path.join(path.dirname(mcpServerPath), 'fmp-mcp-stdio.js')],
             env: {
               FMP_API_KEY: sdkEnv['FMP_API_KEY']!,
+            },
+          },
+        } : {}),
+        ...(sdkEnv['IBKR_FLEX_TOKEN'] && sdkEnv['IBKR_FLEX_QUERY_ID'] ? {
+          ibkr: {
+            command: 'node',
+            args: [path.join(path.dirname(mcpServerPath), 'ibkr-mcp-stdio.js')],
+            env: {
+              IBKR_FLEX_TOKEN: sdkEnv['IBKR_FLEX_TOKEN']!,
+              IBKR_FLEX_QUERY_ID: sdkEnv['IBKR_FLEX_QUERY_ID']!,
+              ...(sdkEnv['HTTPS_PROXY'] ? { HTTPS_PROXY: sdkEnv['HTTPS_PROXY'] } : {}),
+              ...(sdkEnv['HTTP_PROXY'] ? { HTTP_PROXY: sdkEnv['HTTP_PROXY'] } : {}),
             },
           },
         } : {}),
