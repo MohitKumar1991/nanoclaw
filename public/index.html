@@ -505,6 +505,9 @@
       <div class="nav-item active" data-page="overview">
         <span class="icon">&#9634;</span> Overview
       </div>
+      <div class="nav-item" data-page="trades">
+        <span class="icon">&#9733;</span> Trades
+      </div>
       <div class="nav-item" data-page="companies">
         <span class="icon">&#9670;</span> Companies
       </div>
@@ -547,6 +550,51 @@
         <table>
           <thead><tr><th>Group</th><th>Container</th><th>Running</th></tr></thead>
           <tbody id="containers-table"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- TRADES -->
+    <div class="page" id="page-trades">
+      <div class="page-title">Trades</div>
+      <div class="card-grid" id="trades-summary-cards"></div>
+      <div class="filters">
+        <select class="filter-input" id="trades-status-filter">
+          <option value="OPEN">Open</option>
+          <option value="CLOSED">Closed</option>
+          <option value="ALL">All</option>
+        </select>
+        <input type="text" class="filter-input" id="trades-search" placeholder="Search symbol...">
+        <select class="filter-input" id="trades-sort">
+          <option value="position_value">Biggest Position</option>
+          <option value="report_date">Most Recent</option>
+          <option value="fifo_pnl_unrealized">P&L</option>
+          <option value="percent_of_nav">% of NAV</option>
+          <option value="symbol">Symbol</option>
+        </select>
+        <select class="filter-input" id="trades-dir">
+          <option value="DESC">Descending</option>
+          <option value="ASC">Ascending</option>
+        </select>
+        <button class="btn" id="refresh-trades">Refresh</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>Side</th>
+              <th>Qty</th>
+              <th>Cost Basis</th>
+              <th>Mark Price</th>
+              <th>Value</th>
+              <th>% NAV</th>
+              <th>Unrealized P&L</th>
+              <th>Report Date</th>
+              <th>Rationale</th>
+            </tr>
+          </thead>
+          <tbody id="trades-table"></tbody>
         </table>
       </div>
     </div>
@@ -960,6 +1008,75 @@ async function loadLogs() {
 document.getElementById('logs-group-filter').addEventListener('change', loadLogs);
 document.getElementById('refresh-logs').addEventListener('click', loadLogs);
 
+// --- Trades ---
+let tradesData = null;
+
+async function loadTrades() {
+  const status = document.getElementById('trades-status-filter').value;
+  const sort = document.getElementById('trades-sort').value;
+  const dir = document.getElementById('trades-dir').value;
+  tradesData = await api(`/api/trades?status=${status}&sort=${sort}&dir=${dir}`);
+  renderTrades();
+}
+
+function renderTrades() {
+  if (!tradesData) return;
+  const search = (document.getElementById('trades-search').value || '').toLowerCase();
+  const s = tradesData.summary || {};
+
+  const pnlColor = (s.total_unrealized_pnl || 0) >= 0 ? 'var(--green)' : 'var(--red)';
+  const summaryCards = [
+    { label: 'Open Positions', value: s.open_trades || 0, sub: `${s.total_trades || 0} total (${s.closed_trades || 0} closed)` },
+    { label: 'Long Exposure', value: '$' + ((s.long_value || 0) / 1000).toFixed(1) + 'k', sub: 'market value' },
+    { label: 'Short Exposure', value: '$' + ((s.short_value || 0) / 1000).toFixed(1) + 'k', sub: 'market value' },
+    { label: 'Unrealized P&L', value: `<span style="color:${pnlColor}">$${(s.total_unrealized_pnl || 0).toFixed(0)}</span>`, sub: `${s.missing_rationale || 0} missing rationale` },
+  ];
+
+  document.getElementById('trades-summary-cards').innerHTML = summaryCards.map(c =>
+    `<div class="card">
+      <div class="card-label">${c.label}</div>
+      <div class="card-value">${c.value}</div>
+      <div class="card-sub">${c.sub}</div>
+    </div>`
+  ).join('');
+
+  let trades = tradesData.trades || [];
+  if (search) trades = trades.filter(t =>
+    (t.symbol || '').toLowerCase().includes(search) ||
+    (t.description || '').toLowerCase().includes(search)
+  );
+
+  document.getElementById('trades-table').innerHTML = trades.map(t => {
+    const pnl = t.fifo_pnl_unrealized || 0;
+    const pnlClass = pnl >= 0 ? 'badge-green' : 'badge-red';
+    const sideClass = t.side === 'Long' ? 'badge-green' : 'badge-red';
+    const rationale = t.rationale
+      ? escapeHtml(truncate(t.rationale, 60))
+      : '<span class="badge badge-amber">Missing</span>';
+    const reportDate = t.report_date
+      ? t.report_date.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3')
+      : '-';
+    return `<tr>
+      <td><strong>${escapeHtml(t.symbol)}</strong><br><span style="font-size:11px;color:var(--text-secondary)">${escapeHtml(truncate(t.description || '', 30))}</span></td>
+      <td><span class="badge ${sideClass}">${escapeHtml(t.side)}</span></td>
+      <td>${Math.abs(t.position || 0)}</td>
+      <td>${t.currency || ''} ${(t.cost_basis_price || 0).toFixed(2)}</td>
+      <td>${(t.mark_price || 0).toFixed(2)}</td>
+      <td>${(Math.abs(t.position_value || 0)).toFixed(0)}</td>
+      <td>${(t.percent_of_nav || 0).toFixed(1)}%</td>
+      <td><span class="badge ${pnlClass}">${pnl >= 0 ? '+' : ''}${pnl.toFixed(0)}</span></td>
+      <td>${reportDate}</td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(t.rationale || '')}">${rationale}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="10" class="empty-state">No trades found</td></tr>';
+}
+
+document.getElementById('trades-status-filter').addEventListener('change', loadTrades);
+document.getElementById('trades-search').addEventListener('input', renderTrades);
+document.getElementById('trades-sort').addEventListener('change', loadTrades);
+document.getElementById('trades-dir').addEventListener('change', loadTrades);
+document.getElementById('refresh-trades').addEventListener('click', loadTrades);
+
 // --- Trace ---
 async function loadTrace() {
   const sessionId = document.getElementById('trace-session-filter').value;
@@ -1050,6 +1167,7 @@ document.getElementById('refresh-trace').addEventListener('click', loadTrace);
 function loadPage(page) {
   switch (page) {
     case 'overview': loadOverview(); break;
+    case 'trades': loadTrades(); break;
     case 'companies': loadCompanies(); break;
     case 'tasks': loadTasks(); break;
     case 'messages': loadMessages(false); break;

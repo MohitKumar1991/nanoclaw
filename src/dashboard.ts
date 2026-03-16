@@ -236,6 +236,83 @@ function handleCompanies(
   }
 }
 
+function handleTrades(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  url: URL,
+): void {
+  const groupFolder = url.searchParams.get('group') || 'main';
+  const status = url.searchParams.get('status') || 'OPEN';
+  const sortBy = url.searchParams.get('sort') || 'position_value';
+  const sortDir = url.searchParams.get('dir') || 'DESC';
+
+  const db = openCompaniesDb(groupFolder);
+  if (!db) {
+    jsonResponse(res, {
+      trades: [],
+      summary: {},
+      message: 'No companies database found',
+    });
+    return;
+  }
+
+  try {
+    const tables = db
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='trades'`,
+      )
+      .all() as Array<{ name: string }>;
+
+    if (tables.length === 0) {
+      jsonResponse(res, {
+        trades: [],
+        summary: {},
+        message: 'No trades table found',
+      });
+      return;
+    }
+
+    // Validate sort column against allowlist
+    const allowedSorts: Record<string, string> = {
+      position_value: 'ABS(position_value)',
+      report_date: 'report_date',
+      fifo_pnl_unrealized: 'fifo_pnl_unrealized',
+      symbol: 'symbol',
+      percent_of_nav: 'ABS(percent_of_nav)',
+    };
+    const safeSort = allowedSorts[sortBy] || 'ABS(position_value)';
+    const safeDir = sortDir.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+
+    let query = `SELECT * FROM trades`;
+    const params: string[] = [];
+    if (status !== 'ALL') {
+      query += ` WHERE status = ?`;
+      params.push(status);
+    }
+    query += ` ORDER BY ${safeSort} ${safeDir}`;
+
+    const trades = db.prepare(query).all(...params);
+
+    const summary = db
+      .prepare(
+        `SELECT
+          COUNT(*) as total_trades,
+          COUNT(CASE WHEN status = 'OPEN' THEN 1 END) as open_trades,
+          COUNT(CASE WHEN status = 'CLOSED' THEN 1 END) as closed_trades,
+          COUNT(CASE WHEN status = 'OPEN' AND rationale IS NULL THEN 1 END) as missing_rationale,
+          COALESCE(SUM(CASE WHEN status = 'OPEN' AND side = 'Long' THEN position_value ELSE 0 END), 0) as long_value,
+          COALESCE(SUM(CASE WHEN status = 'OPEN' AND side = 'Short' THEN ABS(position_value) ELSE 0 END), 0) as short_value,
+          COALESCE(SUM(CASE WHEN status = 'OPEN' THEN fifo_pnl_unrealized ELSE 0 END), 0) as total_unrealized_pnl
+        FROM trades`,
+      )
+      .get();
+
+    jsonResponse(res, { trades, summary });
+  } finally {
+    db.close();
+  }
+}
+
 function handleFiles(
   _req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -546,6 +623,7 @@ function handleRequest(
   if (pathname === '/api/messages') return handleMessages(req, res, url);
   if (pathname === '/api/tasks') return handleTasks(req, res);
   if (pathname === '/api/companies') return handleCompanies(req, res, url);
+  if (pathname === '/api/trades') return handleTrades(req, res, url);
   if (pathname === '/api/files') return handleFiles(req, res, url);
   if (pathname === '/api/file-tree') return handleFileTree(req, res);
   if (pathname === '/api/logs') return handleLogs(req, res, url);

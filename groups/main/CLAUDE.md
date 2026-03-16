@@ -352,6 +352,125 @@ schedule_task(
 
 ---
 
+## IBKR Portfolio (Flex Web Service)
+
+**Always use the IBKR Flex Web Service** for portfolio data. No other IBKR integration method (Client Portal API, TWS API) is used.
+
+Use the `ibkr` MCP tools to fetch portfolio data from Interactive Brokers:
+- `mcp__ibkr__get_positions` — All open positions with P&L
+- `mcp__ibkr__get_position_summary` — Portfolio summary by currency/asset class
+- `mcp__ibkr__get_position_by_symbol` — Detailed lookup for a specific symbol
+- `mcp__ibkr__refresh_positions` — Force cache refresh (use sparingly — IBKR rate-limits)
+
+---
+
+## Trade Rationales
+
+Track trade rationales alongside IBKR position data. Every open position should have a rationale explaining *why* the trade was entered.
+
+### Database
+
+The trades table lives in the same `/workspace/group/companies.db` database as the company tracker.
+
+**Initialize on first use** (if the table doesn't exist):
+
+```bash
+sqlite3 /workspace/group/companies.db "
+CREATE TABLE IF NOT EXISTS trades (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  conid TEXT NOT NULL UNIQUE,
+  symbol TEXT NOT NULL,
+  description TEXT,
+  currency TEXT,
+  position REAL NOT NULL,
+  side TEXT NOT NULL,
+  open_price REAL,
+  cost_basis_price REAL,
+  cost_basis_money REAL,
+  mark_price REAL,
+  position_value REAL,
+  percent_of_nav REAL,
+  fifo_pnl_unrealized REAL,
+  report_date TEXT NOT NULL,
+  rationale TEXT,
+  status TEXT DEFAULT 'OPEN',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_trades_conid ON trades(conid);
+CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status);
+CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
+"
+```
+
+**Key fields:**
+- `conid` — IBKR contract ID, the stable key for matching positions across days
+- `report_date` — YYYYMMDD from IBKR. If a newer report_date comes in for the same conid, UPDATE the IBKR fields but **preserve the rationale**
+- `rationale` — User-provided thesis. NULL means the user hasn't been asked yet
+- `status` — `OPEN` or `CLOSED`. Never delete rows — closed trades are kept for history
+
+### Daily Trade Sync (09:30 GST, every day)
+
+The scheduled task runs at 09:30 Dubai time every day:
+
+1. Ensure the trades table exists (run CREATE TABLE IF NOT EXISTS)
+2. Call `mcp__ibkr__get_positions` to fetch current IBKR positions
+3. For each IBKR position:
+   - Look up by `conid` in the trades table
+   - **New position** (conid not found): INSERT with all IBKR fields, `rationale = NULL`, `status = 'OPEN'`
+   - **Existing position, newer report_date**: UPDATE all IBKR fields (`position`, `open_price`, `cost_basis_price`, `cost_basis_money`, `mark_price`, `position_value`, `percent_of_nav`, `fifo_pnl_unrealized`, `report_date`, `updated_at`). **Do NOT overwrite rationale.**
+   - **Existing position, same/older report_date**: Skip
+4. For each trade with `status = 'OPEN'` that is NOT in the IBKR positions: set `status = 'CLOSED'`, update `updated_at`
+5. Query all trades where `rationale IS NULL AND status = 'OPEN'`
+6. For each missing rationale, send a Telegram message asking for the user's thesis — **one at a time**, wait for reply before asking about the next one:
+   ```
+   *Trade Rationale Needed*
+
+   {symbol} — {description}
+   {side} {abs(position)} shares @ {cost_basis_price} {currency}
+   Current: {mark_price} | P&L: {fifo_pnl_unrealized}
+
+   What's your thesis for this position?
+   ```
+7. Store the user's reply as the `rationale` for that trade
+
+```
+schedule_task(
+  prompt: "Run the daily trade sync. Ensure the trades table exists in companies.db, fetch IBKR positions via mcp__ibkr__get_positions, sync them into the trades table (insert new, update existing with newer report_date preserving rationale, close positions that disappeared). Then ask the user for rationale on any open trades missing one — ask one at a time and wait for reply.",
+  schedule_type: "cron",
+  schedule_value: "30 9 * * *",
+  context_mode: "group"
+)
+```
+
+### Querying Trades
+
+**All open positions:**
+```bash
+sqlite3 /workspace/group/companies.db "
+SELECT symbol, side, position, cost_basis_price, mark_price, position_value, percent_of_nav, fifo_pnl_unrealized, rationale
+FROM trades WHERE status = 'OPEN' ORDER BY ABS(position_value) DESC;
+"
+```
+
+**Missing rationales:**
+```bash
+sqlite3 /workspace/group/companies.db "
+SELECT symbol, side, position, cost_basis_price FROM trades WHERE status = 'OPEN' AND rationale IS NULL;
+"
+```
+
+**Trade history (closed):**
+```bash
+sqlite3 /workspace/group/companies.db "
+SELECT symbol, side, position, cost_basis_price, mark_price, fifo_pnl_unrealized, rationale, updated_at
+FROM trades WHERE status = 'CLOSED' ORDER BY updated_at DESC;
+"
+```
+
+---
+
 ## Web Search (Perplexity)
 
 **Always use Perplexity MCP tools instead of the built-in `WebSearch`/`WebFetch` for all web searches.**

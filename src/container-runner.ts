@@ -26,6 +26,7 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
+import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
@@ -224,6 +225,8 @@ function readSecrets(): Record<string, string> {
     'ANTHROPIC_AUTH_TOKEN',
     'FMP_API_KEY',
     'PERPLEXITY_API_KEY',
+    'IBKR_FLEX_TOKEN',
+    'IBKR_FLEX_QUERY_ID',
   ]);
 }
 
